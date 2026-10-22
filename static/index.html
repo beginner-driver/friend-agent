@@ -43,6 +43,7 @@ body.has-banner .app{height:calc(100dvh - 32px)}
 .nav button.on{background:var(--accent-soft);color:#c23a3e}
 .nav .count{margin-left:auto;font-size:12px;color:var(--ink-3);font-weight:500}
 .account{margin-top:auto;border-top:1px solid var(--line);padding-top:14px;font-size:13px;color:var(--ink-2);display:flex;flex-direction:column;gap:8px}
+.ver{font-size:11px;color:var(--ink-3);text-align:center}
 .account .id{display:flex;align-items:center;gap:6px}
 .dot{width:8px;height:8px;border-radius:50%;background:var(--ink-3);display:inline-block}
 .dot.on{background:var(--ok)}
@@ -212,6 +213,7 @@ textarea.input{min-height:80px;resize:vertical}
       <button data-view="memory">🧠 기억과 약속 <span class="count" id="memCount"></span></button>
     </nav>
     <div class="account" id="account"></div>
+    <div class="ver" id="ver"></div>
   </aside>
   <div class="scrim" id="scrim"></div>
 
@@ -659,6 +661,7 @@ $("#deleteAll").onclick = async () => {
 
 // ── 시작 ─────────────────────────────────────────────────────
 (async () => {
+  fetch("/version").then(r => r.json()).then(v => $("#ver").textContent = "버전 " + v.commit.slice(0, 7)).catch(() => {});
   cfg = await (await fetch("/api/config")).json();
   options = cfg.options;
   if (!cfg.show_turn_panel) { $("#app").classList.add("no-panel"); $("#panel").hidden = true; }
