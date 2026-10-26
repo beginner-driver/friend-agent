@@ -7,6 +7,7 @@
 - /api/chat: 메시지 한 턴. 결과를 이벤트(JSON 한 줄씩)로 스트리밍한다
 - /api/greeting: 앱을 열 때 먼저 말 걸기
 - /api/ocr: 사진 속 글자 읽기(OCR_ENABLED=true 일 때)
+- /api/qr: 사진 속 QR 코드 읽기(QR_ENABLED=true 일 때)
 - /api/memories, /api/reminders, /api/data: 기억, 약속, 내 데이터 관리
 """
 import html
@@ -18,7 +19,7 @@ from fastapi import Depends, FastAPI, HTTPException, UploadFile
 from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from pydantic import BaseModel
 
-from app import agent, ocr, when
+from app import agent, ocr, qr, when
 from app.auth import Auth, User
 from app.config import ROOT, load_settings
 from app.llm import make_llm
@@ -96,7 +97,7 @@ def config():
             "supabase_url": settings.supabase_url if settings.auth == "supabase" else "",
             "supabase_publishable_key": settings.supabase_publishable_key if settings.auth == "supabase" else "",
             "google_login": settings.google_login, "show_turn_panel": settings.show_turn_panel,
-            "ocr_enabled": settings.ocr_enabled,
+            "ocr_enabled": settings.ocr_enabled, "qr_enabled": settings.qr_enabled,
             "options": OPTIONS, "cities": list(CITIES)}
 
 
@@ -182,6 +183,16 @@ async def read_photo(photo: UploadFile, user: User = Depends(current_user)):
     try:
         return {"text": ocr.read_text(await photo.read())}
     except ocr.OcrError as error:
+        raise HTTPException(500, str(error)) from error
+
+
+@app.post("/api/qr")
+async def read_qr(photo: UploadFile, user: User = Depends(current_user)):
+    if not settings.qr_enabled:
+        raise HTTPException(404, "QR 코드 읽기가 꺼져 있습니다")
+    try:
+        return {"codes": qr.read_codes(await photo.read())}
+    except qr.QrError as error:
         raise HTTPException(500, str(error)) from error
 
 
