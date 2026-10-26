@@ -4,7 +4,7 @@ FROM python:3.13-slim-bookworm
 
 # 2) 운영체제 프로그램 설치: 사진 글자 읽기에 쓰는 tesseract 와 한국어 데이터
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends tesseract-ocr tesseract-ocr-kor \
+    && apt-get install -y --no-install-recommends tesseract-ocr tesseract-ocr-kor libzbar0 \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
