@@ -77,6 +77,7 @@ cd <저장소 이름>
 | `SUPABASE_SECRET_KEY` | `sb_secret_...` | `STORAGE=supabase` 일 때 필수. RLS를 건너뛰는 키라서 Secret Manager에 둔다 |
 | `GOOGLE_LOGIN` | `true`, `false` | 구글 계정 연결 버튼 표시 |
 | `OCR_ENABLED` | `true`, `false` | 사진 글자 읽기(📷 버튼). 운영체제에 tesseract 프로그램과 한국어 데이터가 있어야 한다 |
+| `QR_ENABLED` | `true`, `false` | 사진 속 QR 코드 읽기(🔳 버튼). 운영체제에 zbar 라이브러리가 있어야 한다 |
 | `COMMIT_SHA` | 커밋 해시 | `/version` 에 표시된다. 자동 배포에서 넣는다 |
 | `BANNER` | 짧은 문구 | 화면 위에 띠로 보이고 `/version` 에도 나온다. 이미지를 새로 만들지 않고 새 리비전을 만들어 볼 때 쓴다 |
 | `SLOW_START_SECONDS` | 초 | 배포 실습용 시작 지연. 포트는 바로 열지만 이 시간 동안 모든 요청(`/health` 포함)에 503을 돌려준다. 기본값 0 |
@@ -154,6 +155,7 @@ gcloud run deploy friend-agent --source . --region us-central1 --allow-unauthent
 | 재배포해도 남는 저장, 사용자별 데이터 | `STORAGE=supabase`, `AUTH=supabase` | Supabase 프로젝트, 익명 로그인 켜기. 절차는 `docs/supabase.md`. 동료에게 공개하기 전에 구글 로그인과 함께 붙인다 |
 | 구글 계정 연결 | `GOOGLE_LOGIN=true` | Supabase 구글 로그인 설정, 수동 연결(manual linking) 켜기 |
 | 사진 글자 읽기 | `OCR_ENABLED=true` | tesseract 프로그램. 노트북: `brew install tesseract tesseract-lang`(macOS). 서버: Dockerfile에 설치(`starter/Dockerfile`) |
+| QR 코드 읽기 | `QR_ENABLED=true` | zbar 라이브러리. Windows 는 pyzbar 에 들어 있음, macOS: `brew install zbar`. 서버: Dockerfile에 `libzbar0` 설치 |
 | 앱을 닫아 둬도 오는 약속 알림 | 아직 없음 | Cloud Scheduler, 웹 푸시, PWA |
 
 ## 외부 API

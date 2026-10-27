@@ -233,6 +233,8 @@ textarea.input{min-height:80px;resize:vertical}
         <form class="box" id="form">
           <button type="button" class="photo" id="photoBtn" title="사진에서 글자 읽기" hidden>📷</button>
           <input type="file" id="photoInput" accept="image/*" hidden>
+          <button type="button" class="photo" id="qrBtn" title="사진에서 QR 코드 읽기" hidden>🔳</button>
+          <input type="file" id="qrInput" accept="image/*" hidden>
           <textarea id="input" rows="1" placeholder="메시지를 입력하세요" maxlength="1000"></textarea>
           <button class="send" id="send" title="보내기">↑</button>
         </form>
@@ -500,26 +502,34 @@ $("#input").addEventListener("input", autosize);
 $("#suggest").innerHTML = SUGGEST.map(s => `<button type="button">${esc(s)}</button>`).join("");
 $("#suggest").addEventListener("click", e => { if (e.target.tagName === "BUTTON") send(e.target.textContent); });
 
-// ── 사진 글자 읽기 ───────────────────────────────────────────
-$("#photoBtn").onclick = () => $("#photoInput").click();
-$("#photoInput").onchange = async () => {
-  const file = $("#photoInput").files[0];
-  if (!file) return;
-  const form = new FormData();
-  form.append("photo", file);
-  $("#input").placeholder = "사진에서 글자를 읽는 중…";
-  try {
-    const r = await fetch("/api/ocr", {method: "POST", body: form, headers: token ? {Authorization: `Bearer ${token}`} : {}});
-    const data = await r.json();
-    if (!r.ok) throw new Error(data.detail || r.status);
-    $("#input").value = `사진에서 읽은 글이야. 여기 있는 일정 중에 알려 줘야 할 게 있으면 약속으로 저장해 줘.\n${data.text}`;
-    autosize(); $("#input").focus();
-  } catch (err) {
-    alert("사진에서 글자를 읽지 못했어요: " + err.message);
-  } finally {
-    $("#input").placeholder = "메시지를 입력하세요"; $("#photoInput").value = "";
-  }
-};
+// ── 사진 글자 읽기, QR 코드 읽기 ─────────────────────────────
+function photoReader(btn, input, url, what, toText) {
+  $(btn).onclick = () => $(input).click();
+  $(input).onchange = async () => {
+    const file = $(input).files[0];
+    if (!file) return;
+    const form = new FormData();
+    form.append("photo", file);
+    $("#input").placeholder = `사진에서 ${what}를 읽는 중…`;
+    try {
+      const r = await fetch(url, {method: "POST", body: form, headers: token ? {Authorization: `Bearer ${token}`} : {}});
+      const data = await r.json();
+      if (!r.ok) throw new Error(data.detail || r.status);
+      $("#input").value = toText(data);
+      autosize(); $("#input").focus();
+    } catch (err) {
+      alert(`사진에서 ${what}를 읽지 못했어요: ` + err.message);
+    } finally {
+      $("#input").placeholder = "메시지를 입력하세요"; $(input).value = "";
+    }
+  };
+}
+photoReader("#photoBtn", "#photoInput", "/api/ocr", "글자",
+  data => `사진에서 읽은 글이야. 여기 있는 일정 중에 알려 줘야 할 게 있으면 약속으로 저장해 줘.\n${data.text}`);
+photoReader("#qrBtn", "#qrInput", "/api/qr", "QR 코드", data => {
+  if (!data.codes.length) throw new Error("사진에서 QR 코드를 찾지 못했어요.");
+  return `사진 속 QR 코드에 적힌 내용이야.\n${data.codes.join("\n")}`;
+});
 
 // ── 개발용 패널 ─────────────────────────────────────────────
 function startPanel() {
@@ -666,6 +676,7 @@ $("#deleteAll").onclick = async () => {
   options = cfg.options;
   if (!cfg.show_turn_panel) { $("#app").classList.add("no-panel"); $("#panel").hidden = true; }
   $("#photoBtn").hidden = !cfg.ocr_enabled;
+  $("#qrBtn").hidden = !cfg.qr_enabled;
   try { await initAuth(); } catch (err) { console.error(err); alert("로그인을 시작하지 못했습니다. 잠시 뒤 새로고침해 주세요."); return; }
   me = await api("/api/me");
   renderAccount();
