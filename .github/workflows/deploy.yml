@@ -64,7 +64,33 @@ jobs:
           env_vars: |
             COMMIT_SHA=${{ env.COMMIT }}
             ENV=${{ vars.ENV }}
-          flags: --service-account=${{ vars.RUNTIME_SA }}
+          flags: --service-account=${{ vars.RUNTIME_SA }} --startup-probe=httpGet.path=/health,periodSeconds=5,failureThreshold=24,timeoutSeconds=2
+          no_traffic: true
+          tag: green
+
+      # 3. 새 리비전은 트래픽 0% 이다. 태그 URL 로만 열어 보고, 정상일 때만 다음 단계(전환)로 간다
+      - name: 스모크 테스트 (태그 URL)
+        run: |
+          TAG_URL=$(gcloud run services describe "${{ vars.SERVICE }}" --region us-central1 --format json | jq -r '.status.traffic[] | select(.tag=="green") | .url')
+          [ -n "$TAG_URL" ] || { echo "green 태그 URL 을 찾지 못했다"; exit 1; }
+          for i in $(seq 1 12); do
+            GOT=$(curl -fsS --max-time 10 "$TAG_URL/version" | jq -r .commit || true)
+            echo "시도 $i/12 $TAG_URL 받은 커밋 ${GOT:-없음} (기대 $COMMIT)"
+            if [ "$GOT" = "$COMMIT" ] && curl -fsS --max-time 10 "$TAG_URL/health" > /dev/null; then
+              echo "스모크 테스트 통과"
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "스모크 테스트 실패: 전환하지 않는다"
+          exit 1
+
+      # 4. 스모크 테스트를 통과하면 green 태그의 새 리비전으로 한 번에 100% 옮긴다
+      - name: 전환 (green 으로 100%)
+        run: |
+          PREV=$(gcloud run services describe "${{ vars.SERVICE }}" --region us-central1 --format json | jq -r '.status.traffic | max_by(.percent) | .revisionName')
+          echo "전환 전에 트래픽을 받던 리비전: $PREV (롤백할 때 쓴다)"
+          gcloud run services update-traffic "${{ vars.SERVICE }}" --region us-central1 --to-tags green=100
 
       - name: 배포 결과
         run: |
