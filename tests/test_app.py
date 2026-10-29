@@ -15,7 +15,7 @@ def chat(message):
 
 
 def test_health():
-    assert client.get("/health").json() == {"status": "error"}
+    assert client.get("/health").json() == {"status": "ok"}
 
 
 def test_weather_question_picks_weather_tool():
