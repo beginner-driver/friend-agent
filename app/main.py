@@ -80,7 +80,7 @@ def home():
 
 @app.get("/health")
 def health():
-    return {"status": "ok"}
+    return JSONResponse({"status": "error"}, status_code=503)
 
 
 @app.get("/version")
