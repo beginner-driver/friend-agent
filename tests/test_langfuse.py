@@ -1,17 +1,23 @@
 """Langfuse 계측: 가리기, 키가 없을 때 꺼짐, 한 턴의 관찰 단위 구조, 트레이스 속성. 실제 Langfuse 는 부르지 않는다."""
+import json
 from contextlib import contextmanager
 
 import langfuse
+from fastapi.testclient import TestClient
 from opentelemetry import trace
 
 from app import agent, observe
 from app.llm import FakeLLM
-from app.main import store
+from app.main import app, store
+
+api = TestClient(app)
 
 CURRENT = {}  # 지금 propagate_attributes 안에서 걸려 있는 속성
 SEEN = {}     # 단위 이름 → 그 단위가 만들어질 때 걸려 있던 속성
 FLUSHES = []  # flush() 가 불린 횟수
 HAS_PARENT = {}  # 단위 이름 → 만들어지는 순간 이미 걸려 있는 부모 span 이 있었는가
+SCORES = []   # create_score 로 들어온 점수
+TRACE_ID = "0123456789abcdef0123456789abcdef"
 
 
 @contextmanager
@@ -27,8 +33,13 @@ def fake_propagate(**attrs):
 class FakeLangfuse:
     """start_observation 호출을 (부모 이름, 이름, 종류)로 기록하고, update 로 들어온 값을 이름별로 모은다."""
 
+    trace_id = TRACE_ID
+
     def __init__(self, calls, updates, name=None):
         self.calls, self.updates, self.name = calls, updates, name
+
+    def create_score(self, **fields):
+        SCORES.append(fields)
 
     def start_observation(self, *, name, as_type="span", **fields):
         self.calls.append((self.name, name, as_type))
@@ -152,6 +163,40 @@ def test_turn_ignores_the_request_trace_sampling(monkeypatch):
         run("안녕")
         assert trace.get_current_span() is unsampled  # 끝난 뒤 원래 컨텍스트가 그대로 복원된다
     assert HAS_PARENT["chat-turn"] is False
+
+
+def chat_message_id(monkeypatch=None):
+    """채팅을 한 번 보내고 답 메시지의 ID 를 돌려준다."""
+    r = api.post("/api/chat", json={"message": "안녕"})
+    return next(e["message_id"] for e in map(json.loads, r.text.splitlines()) if e["type"] == "done")
+
+
+def test_reaction_becomes_a_boolean_score_on_the_answers_trace(monkeypatch):
+    monkeypatch.setattr(observe, "_client", lambda: FakeLangfuse([], {}))
+    SCORES.clear()
+    mid = chat_message_id()
+    assert api.post("/api/feedback", json={"message_id": mid, "value": "dislike"}).json() == {"ok": True}
+    assert api.post("/api/feedback", json={"message_id": mid, "value": "like"}).json() == {"ok": True}
+    assert api.post("/api/feedback", json={"message_id": mid, "value": "report", "reason": "내 번호는 010-1234-5678"}).status_code == 200
+    dislike, like, report = SCORES
+    assert (dislike["name"], dislike["value"], dislike["data_type"], dislike["trace_id"]) == ("user-feedback", False, "BOOLEAN", TRACE_ID)
+    assert like["value"] is True and like["score_id"] == dislike["score_id"]  # 마음을 바꾸면 같은 점수를 덮어쓴다
+    assert (report["name"], report["value"], report["comment"]) == ("report", True, "내 번호는 [전화번호]")  # 사유의 개인정보는 가려서 보낸다
+
+
+def test_cannot_score_someone_elses_message_or_a_user_message(monkeypatch):
+    monkeypatch.setattr(observe, "_client", lambda: FakeLangfuse([], {}))
+    SCORES.clear()
+    other = store.add_message("someone-else", "assistant", "남의 답", {"trace_id": TRACE_ID})["id"]
+    mine = store.add_message("local-user", "user", "내 질문", {})["id"]
+    for mid in (other, mine, 999999):
+        assert api.post("/api/feedback", json={"message_id": mid, "value": "dislike"}).status_code == 404
+    assert SCORES == []
+
+
+def test_reaction_without_keys_is_accepted_and_skipped():
+    mid = chat_message_id()  # conftest 가 키를 비워서 계측이 꺼져 있다
+    assert api.post("/api/feedback", json={"message_id": mid, "value": "report", "reason": "x"}).json() == {"ok": True}
 
 
 def test_flush_does_nothing_without_keys():

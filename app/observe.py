@@ -94,6 +94,11 @@ class Obs:
         self.raw = raw
         self.attrs = attrs if attrs is not None else {}  # 자식 단위가 만들어질 때 물려받는 트레이스 속성
 
+    @property
+    def trace_id(self):
+        """이 단위가 속한 트레이스 ID. 계측이 꺼져 있으면 None. 사용자 반응(점수)을 이 트레이스에 붙일 때 쓴다."""
+        return getattr(self.raw, "trace_id", None)
+
     def update(self, **fields):
         try:
             if self.raw is not None:
@@ -162,6 +167,25 @@ def flush():
         client.flush()
     except Exception as error:
         _warn(error)
+
+
+def score(trace_id, name, value, comment=None):
+    """사용자 반응을 트레이스의 점수(BOOLEAN)로 남긴다. 보냈으면 True, 키나 트레이스 ID 가 없어 건너뛰면 False.
+
+    같은 트레이스에 같은 이름으로 다시 보내면 덮어쓴다(score_id 가 같아서). 마음을 바꿔 눌러도 점수가 겹치지 않는다.
+    comment 는 사용자가 쓴 글이라 mask 를 거치고, 점수는 응답을 닫기 전에 보낸다(Cloud Run 은 응답 뒤 CPU 를 불규칙하게 준다).
+    """
+    client = _client()
+    if client is None or not trace_id:
+        return False
+    try:
+        client.create_score(name=name, value=bool(value), trace_id=trace_id, data_type="BOOLEAN",
+                            score_id=f"{trace_id}-{name}", comment=mask(data=comment) if comment else None)
+    except Exception as error:
+        _warn(error)
+        return False
+    flush()
+    return True
 
 
 def usage(obs, tokens):

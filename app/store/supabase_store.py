@@ -74,6 +74,11 @@ class SupabaseStore:
     def add_message(self, uid, role, content, meta=None):
         return self._message(self._insert("messages", {"user_id": uid, "role": role, "content": content, "meta": meta or {}}))
 
+    def get_message(self, uid, message_id):
+        """내 메시지 하나. 남의 메시지이거나 없으면 None. user_id 조건을 반드시 붙인다."""
+        rows = self._get("messages", user_id=f"eq.{uid}", id=f"eq.{message_id}")
+        return self._message(rows[0]) if rows else None
+
     def recent_messages(self, uid, limit):
         rows = self._get("messages", user_id=f"eq.{uid}", order="id.desc", limit=limit)
         return [self._message(r) for r in reversed(rows)]
