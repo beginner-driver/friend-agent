@@ -2,6 +2,7 @@
 from contextlib import contextmanager
 
 import langfuse
+from opentelemetry import trace
 
 from app import agent, observe
 from app.llm import FakeLLM
@@ -10,6 +11,7 @@ from app.main import store
 CURRENT = {}  # 지금 propagate_attributes 안에서 걸려 있는 속성
 SEEN = {}     # 단위 이름 → 그 단위가 만들어질 때 걸려 있던 속성
 FLUSHES = []  # flush() 가 불린 횟수
+HAS_PARENT = {}  # 단위 이름 → 만들어지는 순간 이미 걸려 있는 부모 span 이 있었는가
 
 
 @contextmanager
@@ -32,6 +34,7 @@ class FakeLangfuse:
         self.calls.append((self.name, name, as_type))
         self.updates.setdefault(name, {}).update(fields)
         SEEN[name] = dict(CURRENT)
+        HAS_PARENT[name] = trace.get_current_span().get_span_context().is_valid
         return FakeLangfuse(self.calls, self.updates, name)
 
     def update(self, **fields):
@@ -137,6 +140,18 @@ def test_records_are_flushed_before_the_response_closes(monkeypatch):
     next(stream)
     stream.close()  # 사용자가 중간에 화면을 닫은 경우에도 보낸다
     assert len(FLUSHES) == 3
+
+
+def test_turn_ignores_the_request_trace_sampling(monkeypatch):
+    """Cloud Run 이 붙이는 traceparent 가 sampled=0 이면 그 하위 span 은 기록되지 않는다. 대화 기록은 항상 새 트레이스로 시작한다."""
+    monkeypatch.setattr(observe, "_client", lambda: FakeLangfuse([], {}))
+    HAS_PARENT.clear()
+    unsampled = trace.NonRecordingSpan(trace.SpanContext(trace_id=0xABC, span_id=0x123, is_remote=True,
+                                                         trace_flags=trace.TraceFlags(0)))
+    with trace.use_span(unsampled):
+        run("안녕")
+        assert trace.get_current_span() is unsampled  # 끝난 뒤 원래 컨텍스트가 그대로 복원된다
+    assert HAS_PARENT["chat-turn"] is False
 
 
 def test_flush_does_nothing_without_keys():
