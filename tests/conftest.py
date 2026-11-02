@@ -5,4 +5,6 @@
 import os
 
 os.environ.update({"LLM_PROVIDER": "fake", "LLM_API_KEY": "", "STORAGE": "memory", "AUTH": "none"})
+# .env 에 Langfuse 키가 있어도 테스트의 가짜 대화가 실제 프로젝트로 전송되지 않게 비운다. 키가 비면 계측이 꺼진다.
+os.environ.update({"LANGFUSE_PUBLIC_KEY": "", "LANGFUSE_SECRET_KEY": ""})
 os.environ.setdefault("ENV", "test")

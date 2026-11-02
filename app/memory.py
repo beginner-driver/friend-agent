@@ -6,7 +6,7 @@
 """
 import re
 
-from app import when
+from app import observe, when
 from app.logs import log
 from app.safety import is_sensitive
 
@@ -75,16 +75,26 @@ def rule_extract(message):
     return {"add": found, "update": [], "remove": []}
 
 
-def update_memories(store, uid, user_message, reply, now, llm):
+def update_memories(store, uid, user_message, reply, now, llm, parent=None):
     """방금 턴에서 기억할 것을 뽑아 저장한다. 바뀐 내용을 돌려준다(화면 표시용)."""
+    with observe.observation("memory-update", "generation", parent=parent, model=getattr(llm, "model", None),
+                             input=user_message) as obs:
+        changes = _update_memories(store, uid, user_message, reply, now, llm, obs)
+        obs.update(output={kind: [m["text"] for m in items] for kind, items in changes.items()})
+        return changes
+
+
+def _update_memories(store, uid, user_message, reply, now, llm, obs):
     existing = store.list_memories(uid)
     if getattr(llm, "can_reason", False):
         listed = "\n".join(f"- id={m['id']} ({m['kind']}) {m['text']}" for m in existing) or "(없음)"
         user = f"[지금] {now:%Y-%m-%d %H:%M}\n[달력]\n{when.calendar_hint(now)}\n[이미 있는 기억]\n{listed}\n\n[대화]\nuser: {user_message}\nassistant: {reply}"
+        obs.update(input=user)  # 모델이 실제로 받은 입력으로 바꾼다
         try:
-            plan = llm.complete_json(EXTRACT_PROMPT, user)
+            plan = llm.complete_json(EXTRACT_PROMPT, user, obs=obs)
         except Exception as error:
             log("WARNING", "기억 정리 실패", error=type(error).__name__)
+            obs.update(level="WARNING", status_message="기억 정리 실패: " + type(error).__name__)
             return {"added": [], "updated": [], "removed": []}
     else:
         plan = rule_extract(user_message)
@@ -112,7 +122,7 @@ def update_memories(store, uid, user_message, reply, now, llm):
     return changes
 
 
-def maybe_summarize(store, uid, llm):
+def maybe_summarize(store, uid, llm, parent=None):
     """요약되지 않은 메시지가 많으면 앞쪽을 요약에 합친다. 요약했으면 True."""
     summary = store.get_summary(uid)
     pending = store.messages_after(uid, summary["covers_until"] if summary else 0)
@@ -121,11 +131,14 @@ def maybe_summarize(store, uid, llm):
     batch = pending[:SUMMARIZE_BATCH]
     talk = "\n".join(f"{m['role']}: {m['content']}" for m in batch)
     previous = f"[기존 요약]\n{summary['text']}\n\n" if summary else ""
-    if getattr(llm, "can_reason", False):
-        text = llm.complete_text([{"role": "system", "content": SUMMARY_PROMPT},
-                                  {"role": "user", "content": f"{previous}[대화]\n{talk}"}])
-    else:
-        text = ((summary["text"] + " ") if summary else "") + f"메시지 {len(batch)}개를 주고받았다."
+    with observe.observation("memory-summary", "generation", parent=parent, model=getattr(llm, "model", None),
+                             input=f"{previous}[대화]\n{talk}", metadata={"messages": len(batch)}) as obs:
+        if getattr(llm, "can_reason", False):
+            text = llm.complete_text([{"role": "system", "content": SUMMARY_PROMPT},
+                                      {"role": "user", "content": f"{previous}[대화]\n{talk}"}], obs=obs)
+        else:
+            text = ((summary["text"] + " ") if summary else "") + f"메시지 {len(batch)}개를 주고받았다."
+        obs.update(output=text)
     store.save_summary(uid, text[:2000], batch[-1]["id"])
     log("INFO", "대화 요약 갱신", covered=len(batch))
     return True

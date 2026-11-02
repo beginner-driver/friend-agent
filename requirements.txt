@@ -8,3 +8,4 @@ python-multipart>=0.0.9
 pytesseract>=0.3.10
 pillow>=10.4
 pyzbar>=0.1.9
+langfuse==5.1.0
