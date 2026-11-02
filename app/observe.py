@@ -102,13 +102,23 @@ class Obs:
             _warn(error)
 
 
-def _start(source, name, as_type, attrs, fields):
+def _start(source, name, as_type, attrs, fields, new_trace):
     from langfuse import propagate_attributes
+    from opentelemetry import context as otel_context
 
-    if not attrs:
-        return source.start_observation(name=name, as_type=as_type, **fields)
-    with propagate_attributes(**attrs):  # 만드는 순간의 컨텍스트에서 속성을 읽는다. yield 를 걸치지 않아 스레드가 바뀌어도 안전하다
-        return source.start_observation(name=name, as_type=as_type, **fields)
+    # 새 트레이스의 첫 단위는 들어온 요청의 추적 상태를 이어받지 않게 빈 컨텍스트에서 만든다.
+    # Cloud Run 은 요청에 traceparent 를 붙여 일부만 sampled=1 로 표시하는데, 그 요청의 하위로 만들어지면
+    # sampled=0 인 요청의 기록이 오류 없이 사라진다(span 이 기록되지 않음). 대화 기록은 요청 표본과 상관없이 항상 남겨야 한다.
+    # 같은 스레드에서 짧게 걸었다 바로 풀어서 yield 하는 제너레이터에서도 안전하다.
+    token = otel_context.attach(otel_context.Context()) if new_trace else None
+    try:
+        if not attrs:
+            return source.start_observation(name=name, as_type=as_type, **fields)
+        with propagate_attributes(**attrs):  # 만드는 순간의 컨텍스트에서 속성을 읽는다
+            return source.start_observation(name=name, as_type=as_type, **fields)
+    finally:
+        if token is not None:
+            otel_context.detach(token)
 
 
 @contextmanager
@@ -123,7 +133,7 @@ def observation(name, as_type="span", parent=None, attrs=None, **fields):
     obs = Obs(attrs=attrs)
     if source is not None:
         try:
-            obs = Obs(_start(source, name, as_type, attrs, fields), attrs)
+            obs = Obs(_start(source, name, as_type, attrs, fields, new_trace=parent is None), attrs)
         except Exception as error:
             _warn(error)
     try:
