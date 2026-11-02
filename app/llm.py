@@ -8,6 +8,8 @@ import json
 import re
 import time
 
+from app import observe
+
 
 class OpenAICompatibleLLM:
     can_reason = True  # 도구 선택, 기억 정리를 모델에게 맡길 수 있다
@@ -18,21 +20,28 @@ class OpenAICompatibleLLM:
         self.client = OpenAI(api_key=api_key, base_url=base_url, timeout=60)
         self.model = model
 
-    def complete_json(self, system, user):
+    # obs: 이 호출을 기록하는 Langfuse generation(observe.py). 없으면 기록하지 않는다.
+    def complete_json(self, system, user, obs=None):
         """도구 선택처럼 정해진 형식의 답이 필요할 때. JSON 하나를 받아 dict로 돌려준다."""
         response = self.client.chat.completions.create(
             model=self.model,
             messages=[{"role": "system", "content": system}, {"role": "user", "content": user}],
             response_format={"type": "json_object"},
         )
+        observe.usage(obs, getattr(response, "usage", None))
         return json.loads(response.choices[0].message.content)
 
-    def complete_text(self, messages):
+    def complete_text(self, messages, obs=None):
         response = self.client.chat.completions.create(model=self.model, messages=messages)
+        observe.usage(obs, getattr(response, "usage", None))
         return response.choices[0].message.content.strip()
 
-    def chat_stream(self, messages):
-        """답을 만들어지는 대로 조금씩 돌려준다(스트리밍)."""
+    def chat_stream(self, messages, obs=None):
+        """답을 만들어지는 대로 조금씩 돌려준다(스트리밍).
+
+        스트리밍 응답에서 토큰 수를 받으려면 요청에 stream_options 를 더해야 한다. 호출 방식을 바꾸지 않으려고
+        여기서는 토큰 수를 남기지 않는다(obs 는 쓰지 않는다).
+        """
         response = self.client.chat.completions.create(model=self.model, messages=messages, stream=True)
         for event in response:
             if event.choices and event.choices[0].delta.content:
@@ -84,19 +93,22 @@ class ClaudeLLM:
             return self.REFUSAL_NOTICE
         return "".join(block.text for block in response.content if block.type == "text").strip()
 
-    def complete_json(self, system, user):
+    def complete_json(self, system, user, obs=None):
         """정해진 형식의 답이 필요할 때. 답에서 JSON 객체 하나를 찾아 dict로 돌려준다."""
         system = system + "\n\n반드시 JSON 객체 하나만 출력한다. 설명이나 코드 블록 표시는 붙이지 않는다."
         response = self.client.beta.messages.create(**self._request(system, [{"role": "user", "content": user}]))
+        observe.usage(obs, getattr(response, "usage", None))
         if response.stop_reason == "refusal":
             raise ValueError("Claude가 요청을 거절했습니다.")
         return parse_json_object(self._text(response))
 
-    def complete_text(self, messages):
+    def complete_text(self, messages, obs=None):
         system, turns = self.to_claude(messages)
-        return self._text(self.client.beta.messages.create(**self._request(system, turns)))
+        response = self.client.beta.messages.create(**self._request(system, turns))
+        observe.usage(obs, getattr(response, "usage", None))
+        return self._text(response)
 
-    def chat_stream(self, messages):
+    def chat_stream(self, messages, obs=None):
         """답을 만들어지는 대로 조금씩 돌려준다(스트리밍)."""
         system, turns = self.to_claude(messages)
         with self.client.beta.messages.stream(**self._request(system, turns)) as stream:
@@ -104,7 +116,9 @@ class ClaudeLLM:
             for text in stream.text_stream:
                 sent = True
                 yield text
-            if stream.get_final_message().stop_reason == "refusal" and not sent:
+            final = stream.get_final_message()
+            observe.usage(obs, getattr(final, "usage", None))
+            if final.stop_reason == "refusal" and not sent:
                 yield self.REFUSAL_NOTICE
 
 
@@ -150,10 +164,10 @@ class FakeLLM:
             body = "그랬군요. 조금 더 이야기해 줄래요?" if polite else "그랬구나. 조금 더 얘기해 줄래?"
         return f"(가짜 응답) {body}"
 
-    def complete_text(self, messages):
+    def complete_text(self, messages, obs=None):
         return self._reply(messages)
 
-    def chat_stream(self, messages):
+    def chat_stream(self, messages, obs=None):
         text = self._reply(messages)
         for i in range(0, len(text), 4):
             time.sleep(self.delay)
