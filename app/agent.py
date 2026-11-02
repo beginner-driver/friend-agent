@@ -40,8 +40,11 @@ def run_turn(message, uid, llm, store, show_panel):
     # 위기 표현 여부는 속성을 처음부터 붙이려고 여기서 한 번 더 판정한다(아래 safety 단계가 같은 판정을 기록한다).
     crisis = is_crisis(message)
     attrs = observe.trace_attributes(uid, tags=["safety"] if crisis else (), safety=str(crisis).lower())
-    with observe.observation("chat-turn", attrs=attrs, input=message) as root:
-        yield from _run_turn(message, uid, llm, store, show_panel, root)
+    try:
+        with observe.observation("chat-turn", attrs=attrs, input=message) as root:
+            yield from _run_turn(message, uid, llm, store, show_panel, root)
+    finally:  # 응답이 중간에 끊겨도 모은 기록을 보낸다
+        observe.flush()
 
 
 def _run_turn(message, uid, llm, store, show_panel, root):
@@ -153,6 +156,7 @@ def greet(uid, llm, store):
                              input=messages, metadata={"reminders": len(due)}) as gen:
         text = llm.complete_text(messages, obs=gen)
         gen.update(output=text)
+    observe.flush()
     saved = store.add_message(uid, "assistant", text, {"action": "greeting", "reminders": [r["id"] for r in due]})
     log("INFO", "먼저 말 걸기", reminders=len(due))
     return {"id": saved["id"], "text": text, "reminders": [r["text"] for r in due]}

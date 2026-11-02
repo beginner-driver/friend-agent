@@ -9,6 +9,7 @@ from app.main import store
 
 CURRENT = {}  # 지금 propagate_attributes 안에서 걸려 있는 속성
 SEEN = {}     # 단위 이름 → 그 단위가 만들어질 때 걸려 있던 속성
+FLUSHES = []  # flush() 가 불린 횟수
 
 
 @contextmanager
@@ -38,6 +39,9 @@ class FakeLangfuse:
 
     def end(self):
         pass
+
+    def flush(self):
+        FLUSHES.append(1)
 
 
 def run(message):
@@ -119,6 +123,24 @@ def test_greeting_carries_user_and_session(monkeypatch):
     SEEN.clear()
     assert agent.greet("greeting-test", FakeLLM(delay=0), store) is not None
     assert SEEN["greeting"]["user_id"] == "greeting-test" and SEEN["greeting"]["session_id"].startswith("greeting-test-20")
+
+
+def test_records_are_flushed_before_the_response_closes(monkeypatch):
+    """Cloud Run 은 응답이 끝나면 CPU 를 불규칙하게 줘서, 백그라운드 전송에 맡기면 기록이 빠진다."""
+    monkeypatch.setattr(observe, "_client", lambda: FakeLangfuse([], {}))
+    FLUSHES.clear()
+    run("안녕")
+    assert len(FLUSHES) == 1
+    assert agent.greet("flush-test", FakeLLM(delay=0), store) is not None
+    assert len(FLUSHES) == 2
+    stream = agent.run_turn("안녕", "flush-test", FakeLLM(delay=0), store, True)
+    next(stream)
+    stream.close()  # 사용자가 중간에 화면을 닫은 경우에도 보낸다
+    assert len(FLUSHES) == 3
+
+
+def test_flush_does_nothing_without_keys():
+    observe.flush()  # 키가 없으면 오류 없이 지나간다
 
 
 def test_crisis_turn_records_safety_only(monkeypatch):
