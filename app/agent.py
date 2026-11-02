@@ -65,7 +65,8 @@ def _run_turn(message, uid, llm, store, show_panel, root):
             yield {"type": "turn", "tools": [], "confidence": None, "reason": "", "decided_by": "rule",
                    "action": "safety", "guards": guards}
         yield {"type": "delta", "text": CRISIS_REPLY}
-        saved = store.add_message(uid, "assistant", CRISIS_REPLY, {"action": "safety", "guards": guards})
+        saved = store.add_message(uid, "assistant", CRISIS_REPLY,
+                                  {"action": "safety", "guards": guards, "trace_id": root.trace_id})
         log("WARNING", "위기 표현 안전 응답")
         root.update(output=CRISIS_REPLY, metadata={"message_id": saved["id"], "action": "safety"})
         yield {"type": "done", "message_id": saved["id"]}
@@ -116,7 +117,8 @@ def _run_turn(message, uid, llm, store, show_panel, root):
         gen.update(output=reply)
     meta = {"tools": [t["name"] for t in choice.tools], "confidence": choice.confidence,
             "action": choice.action, "guards": choice.guards}
-    saved = store.add_message(uid, "assistant", reply, meta)
+    # 사용자 반응(좋아요, 별로예요, 신고)을 이 트레이스의 점수로 붙이려고 트레이스 ID 를 메시지에 함께 저장한다
+    saved = store.add_message(uid, "assistant", reply, {**meta, "trace_id": root.trace_id})
     root.update(output=reply, metadata={"message_id": saved["id"], **meta})
 
     # ⑤ 기억 정리
@@ -157,6 +159,7 @@ def greet(uid, llm, store):
         text = llm.complete_text(messages, obs=gen)
         gen.update(output=text)
     observe.flush()
-    saved = store.add_message(uid, "assistant", text, {"action": "greeting", "reminders": [r["id"] for r in due]})
+    saved = store.add_message(uid, "assistant", text,
+                              {"action": "greeting", "reminders": [r["id"] for r in due], "trace_id": gen.trace_id})
     log("INFO", "먼저 말 걸기", reminders=len(due))
     return {"id": saved["id"], "text": text, "reminders": [r["text"] for r in due]}

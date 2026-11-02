@@ -14,12 +14,13 @@ import html
 import json
 import os
 import time
+from typing import Literal
 
 from fastapi import Depends, FastAPI, HTTPException, UploadFile
 from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from pydantic import BaseModel
 
-from app import agent, ocr, qr, when
+from app import agent, observe, ocr, qr, when
 from app.auth import Auth, User
 from app.config import ROOT, load_settings
 from app.llm import make_llm
@@ -64,8 +65,9 @@ class SettingsRequest(BaseModel):
     timezone: str | None = None
 
 
-class ReportRequest(BaseModel):
+class FeedbackRequest(BaseModel):
     message_id: int
+    value: Literal["like", "dislike", "report"]
     reason: str = ""
 
 
@@ -196,10 +198,20 @@ async def read_qr(photo: UploadFile, user: User = Depends(current_user)):
         raise HTTPException(500, str(error)) from error
 
 
-@app.post("/api/report")
-def report(req: ReportRequest, user: User = Depends(current_user)):
-    # 지금은 로그로만 남긴다. 관측 도구를 붙이면 그 도구의 점수로 보낸다.
-    log("WARNING", "부적절한 답변 신고", message_id=req.message_id, reason_length=len(req.reason))
+@app.post("/api/feedback")
+def feedback(req: FeedbackRequest, user: User = Depends(current_user)):
+    """답에 대한 반응(좋아요, 별로예요, 신고)을 그 답의 Langfuse 트레이스에 점수로 붙인다."""
+    message = store.get_message(user.id, req.message_id)  # 로그인한 사용자의 메시지만 찾는다
+    if not message or message["role"] != "assistant":
+        raise HTTPException(404, "메시지를 찾을 수 없습니다")
+    trace_id = message["meta"].get("trace_id")
+    reason = req.reason.strip()[:500]
+    if req.value == "report":
+        log("WARNING", "부적절한 답변 신고", message_id=req.message_id, reason_length=len(reason))
+        observe.score(trace_id, "report", True, reason or None)
+    else:
+        log("INFO", "답변 반응", value=req.value)
+        observe.score(trace_id, "user-feedback", req.value == "like")
     return {"ok": True}
 
 
