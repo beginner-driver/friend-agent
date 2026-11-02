@@ -139,6 +139,21 @@ def observation(name, as_type="span", parent=None, attrs=None, **fields):
             _warn(error)
 
 
+def flush():
+    """모아 둔 기록을 지금 보낸다. 키가 없으면 아무것도 하지 않는다.
+
+    Cloud Run 은 응답이 끝나면 CPU 를 불규칙하게 줘서, SDK 의 백그라운드 전송(5초마다)에 맡기면 기록이 빠지거나 늦는다.
+    그래서 응답을 닫기 전에 한 턴이 끝날 때 직접 보낸다. 대가는 응답 종료가 전송 시간만큼 늦어지는 것이다.
+    """
+    client = _client()
+    if client is None:
+        return
+    try:
+        client.flush()
+    except Exception as error:
+        _warn(error)
+
+
 def usage(obs, tokens):
     """모델 응답의 토큰 수를 generation 에 남긴다. 토큰 수가 없는 응답(가짜 LLM, 테스트)은 건너뛴다.
 
