@@ -3,6 +3,7 @@
 실행:
   python scripts/eval_tools.py            # .env 의 LLM 으로 모델 선택기를 평가 (호출 40번, 비용 발생)
   python scripts/eval_tools.py --rule     # 키워드 규칙 선택기를 평가 (비용 없음)
+  python scripts/eval_tools.py --label staging   # Langfuse 프롬프트 router 의 staging 라벨 버전으로 평가 (못 가져오면 중단)
 
 정답의 날짜와 시각은 '2026-10-12(월) 14:00 한국 시간'을 지금으로 보고 만들었다. 평가도 그 시각을 지금으로 쓴다.
 """
@@ -14,9 +15,10 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
+from app import observe  # noqa: E402
 from app.config import load_settings  # noqa: E402
 from app.llm import make_llm  # noqa: E402
-from app.router import model_choose, rule_choose  # noqa: E402
+from app.router import ROUTER_TEMPLATE, model_choose, router_variables, rule_choose  # noqa: E402
 
 NOW = datetime.fromisoformat("2026-10-12T14:00:00+09:00")
 LOCATION = "서울"
@@ -53,6 +55,14 @@ def main():
     if llm is not None and not llm.can_reason:
         print("LLM_PROVIDER=fake 에서는 모델 평가를 할 수 없습니다. --rule 로 실행하세요.")
         return
+    # --label 이 없으면 코드의 지시문, 있으면 Langfuse 프롬프트 router 의 그 라벨 버전으로 평가한다.
+    label = sys.argv[sys.argv.index("--label") + 1] if "--label" in sys.argv else observe.CODE
+    prompt_name = "코드의 지시문"
+    if not use_rule and label != observe.CODE:
+        _, managed = observe.managed_prompt("router", ROUTER_TEMPLATE, label, **router_variables())
+        if managed is None:  # 못 가져왔는데 코드 문장으로 대신하면 서로 같은 문장을 비교하게 된다
+            sys.exit(f"Langfuse 에서 router 프롬프트(라벨 {label})를 가져오지 못했습니다. 키와 라벨을 확인하세요.")
+        prompt_name = f"Langfuse router v{managed.version}(라벨 {label})"
 
     rows = [json.loads(line) for line in (ROOT / "data/eval/tool_selection.jsonl").read_text(encoding="utf-8").splitlines()]
     tool_ok = args_ok = 0
@@ -61,7 +71,7 @@ def main():
         if use_rule:
             choice = rule_choose(row["message"], NOW, LOCATION)
         else:
-            choice = model_choose(row["message"], row["history"], NOW, LOCATION, llm)
+            choice = model_choose(row["message"], row["history"], NOW, LOCATION, llm, label=label)
         picked = {t["name"] for t in choice.tools}
         required, optional = set(row["expected_tools"]), set(row["optional_tools"])
         tools_right = required <= picked <= required | optional
@@ -77,7 +87,7 @@ def main():
             failures.append((row, sorted(picked), wrong, choice.confidence))
 
     n = len(rows)
-    print(f"[{'키워드 규칙' if use_rule else '모델 ' + llm.model}] 도구 정답 {tool_ok}/{n}, 도구와 인자 모두 정답 {args_ok}/{n}")
+    print(f"[{'키워드 규칙' if use_rule else '모델 ' + llm.model + ', ' + prompt_name}] 도구 정답 {tool_ok}/{n}, 도구와 인자 모두 정답 {args_ok}/{n}")
     for row, picked, wrong, conf in failures:
         detail = "; ".join(wrong) if wrong else f"정답 {row['expected_tools'] or '도구 없음'}, 결과 {picked or '도구 없음'}"
         print(f"  {row['id']} {row['message']}  →  {detail}  (확신도 {conf:.2f})")
