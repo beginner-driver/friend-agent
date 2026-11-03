@@ -151,7 +151,7 @@ def get_holidays(args, ctx):
     today = when.now_in(ctx.timezone).date()
     try:
         start = date.fromisoformat(args.get("from") or today.isoformat())
-        end = date.fromisoformat(args.get("to") or (today + timedelta(days=365)).isoformat())
+        end = date.fromisoformat(args.get("to") or (start + timedelta(days=365)).isoformat())  # to 를 비우면 from 부터 1년
     except ValueError:
         start, end = today, today + timedelta(days=365)
     found = []
