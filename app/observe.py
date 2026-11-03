@@ -13,6 +13,7 @@ next() 마다 다른 스레드에서 실행될 수 있고, 그러면 컨텍스�
 import functools
 import os
 import re
+import time
 from contextlib import contextmanager
 
 from app import when
@@ -186,6 +187,50 @@ def score(trace_id, name, value, comment=None):
         return False
     flush()
     return True
+
+
+CODE = "code"  # label 로 쓰면 Langfuse 를 거치지 않고 코드의 문장만 쓴다(평가 스크립트의 기본)
+PROMPT_RETRY_SECONDS = 60
+_prompt_retry_at = 0.0  # 이 시각(time.monotonic)까지는 Langfuse 프롬프트를 가져오지 않는다
+
+
+def fill(template, **variables):
+    """{{이름}} 자리를 값으로 채운다. Langfuse 의 compile 과 같은 규칙이라, 못 가져왔을 때 코드 문장도 똑같이 만들어진다."""
+    for name, value in variables.items():
+        template = template.replace("{{" + name + "}}", str(value))
+    return template
+
+
+def prompt_label():
+    """production 서비스는 production 라벨, 그 밖의 환경(staging, 로컬)은 staging 라벨의 프롬프트를 쓴다."""
+    return "production" if os.environ.get("ENV", "").strip().lower() == "production" else "staging"
+
+
+def managed_prompt(name, template, label=None, **variables):
+    """Langfuse 프롬프트 관리의 문장을 (문장, 프롬프트 객체)로 돌려준다. 객체는 generation 에 연결해 트레이스에 버전을 남긴다.
+
+    키가 없거나, 가져오지 못했거나(SDK 가 fallback 을 돌려줌), label 이 CODE 이면 코드의 문장과 None 을 돌려준다.
+    그래서 Langfuse 가 안 닿아도 대화는 그대로 이어진다. 로그에는 오류 종류만 남긴다.
+    """
+    global _prompt_retry_at
+    local = fill(template, **variables)
+    client = None if label == CODE else _client()
+    if client is None or time.monotonic() < _prompt_retry_at:
+        return local, None
+    try:
+        # ponytail: 성공하면 SDK 캐시(기본 60초)가 답한다. 처음 가져올 때만 최대 2초 기다려서, 콜드 스타트 첫 요청이 그만큼 늦어질 수 있다.
+        prompt = client.get_prompt(name, label=label or prompt_label(), type="text", fallback=template,
+                                   fetch_timeout_seconds=2, max_retries=0)
+        if not getattr(prompt, "is_fallback", False):
+            return prompt.compile(**{key: str(value) for key, value in variables.items()}), prompt
+        reason = "fallback"  # SDK 가 못 가져와서 코드 문장을 대신 돌려준 경우
+    except Exception as error:
+        reason = type(error).__name__
+    # 못 가져왔다. SDK 는 fallback 을 캐시하지 않아 요청마다 기다리게 되므로, 일정 시간은 시도하지 않고 바로 코드 문장을 쓴다.
+    _prompt_retry_at = time.monotonic() + PROMPT_RETRY_SECONDS
+    log("WARNING", f"Langfuse 프롬프트를 가져오지 못해 코드의 문장을 씁니다. {PROMPT_RETRY_SECONDS}초 동안 다시 시도하지 않습니다",
+        prompt=name, reason=reason)
+    return local, None
 
 
 def usage(obs, tokens):
