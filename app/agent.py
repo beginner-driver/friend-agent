@@ -24,7 +24,9 @@ GREETING_GAP = timedelta(hours=6)  # 마지막 대화 뒤 이만큼 지나면 �
 
 def system_prompt(character, now, location, memories, summary, tool_lines=(), clarify=False):
     parts = [build_persona(character),
-             f"[지금] {when.label(now)} ({now.tzinfo}), 사용자 지역: {location}\n[달력]\n{when.calendar_hint(now)}"]
+             f"[지금] {when.label(now)} ({now.tzinfo}), 사용자 지역: {location}\n[달력]\n{when.calendar_hint(now)}",
+             # 대화 기록에는 앞 답의 글자만 남고 그때의 도구 결과는 없어서, 모델이 앞 답을 근거 없이 말한 것으로 보고 정정한다
+             "[지난 대화]\n앞에서 말한 날씨·날짜·약속은 도구로 확인한 것이니 정정하지 않는다. 이번 [도구 결과]와 다르면 바로잡는다."]
     block = memory.memory_block(memories, summary)
     if block:
         parts.append(block)

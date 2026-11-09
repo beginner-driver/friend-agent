@@ -26,16 +26,16 @@ CANCEL_WORDS = ["취소", "지워", "없던 걸로", "안 알려 줘도", "안 �
 LIST_PATTERN = re.compile(r"(약속|알림|리마인드).*(뭐|목록|있어|있지|있었|보여|확인)")
 
 
-def router_prompt():
-    tools = "\n".join(f"- {name}: {t['desc']}. 인자 {t['args']}" for name, t in TOOLS.items())
-    return "\n".join([
+# 도구 선택 지시문의 템플릿. Langfuse 프롬프트 router 의 버전 1 과 글자까지 같다(scripts/upload_prompts.py 가 이걸 올린다).
+# 도구 목록과 최대 개수처럼 코드가 정하는 값만 {{변수}} 로 두고, router_variables() 가 채운다.
+ROUTER_TEMPLATE = "\n".join([
         "너는 AI 친구 서비스에서 사용자 메시지에 답하기 전에 필요한 도구를 고르는 선택기다.",
         "쓸 수 있는 도구:",
-        tools,
+        "{{tools}}",
         "",
         "규칙:",
         "- 도구가 필요 없는 일상 대화면 tools 를 빈 배열로 둔다. 대부분의 메시지는 여기에 해당한다.",
-        f"- 꼭 필요한 도구만 최대 {MAX_TOOLS}개 고른다. 묻지 않은 정보의 도구는 덧붙이지 않는다(날씨만 물으면 get_weather 하나).",
+        "- 꼭 필요한 도구만 최대 {{max_tools}}개 고른다. 묻지 않은 정보의 도구는 덧붙이지 않는다(날씨만 물으면 get_weather 하나).",
         "- 날씨나 미세먼지 이야기를 해도 예보를 묻는 게 아니라 경험이나 하소연이면 도구를 쓰지 않는다.",
         "- location 은 메시지에 도시 이름이 있으면 그 도시, 없으면 사용자 지역이다.",
         "- date 는 [달력]을 보고 정한 YYYY-MM-DD 날짜다. 날짜 표현이 없으면 오늘이다.",
@@ -46,7 +46,17 @@ def router_prompt():
         "- confidence 는 고른 결과가 맞을 확신을 0과 1 사이 숫자로 쓴다.",
         "- reason 은 고른 이유를 한국어 한 문장으로 쓴다.",
         '- 반드시 JSON 하나로만 답한다: {"tools": [{"name": "도구 이름", "args": {인자}}], "confidence": 0과 1 사이 숫자, "reason": "이유"}',
-    ])
+])
+
+
+def router_variables():
+    return {"tools": "\n".join(f"- {name}: {t['desc']}. 인자 {t['args']}" for name, t in TOOLS.items()),
+            "max_tools": MAX_TOOLS}
+
+
+def router_prompt():
+    """코드에 둔 지시문. Langfuse 에서 못 가져올 때 쓰고, 평가 스크립트의 기본이다."""
+    return observe.fill(ROUTER_TEMPLATE, **router_variables())
 
 
 @dataclass
@@ -112,13 +122,17 @@ def rule_choose(message, now, location):
 
 # ── 모델 ────────────────────────────────────────────────────────────
 
-def model_choose(message, history, now, location, llm, step=None):
+def model_choose(message, history, now, location, llm, step=None, label=None):
+    """label: 쓸 Langfuse 프롬프트 라벨. 비우면 ENV 에 따라 production 또는 staging, observe.CODE 면 코드의 문장."""
     recent = "\n".join(f"{m['role']}: {m['content']}" for m in history[-4:]) or "(없음)"
     user = (f"[지금] {now.isoformat()} ({when.WEEKDAYS[now.weekday()]}요일)\n[달력]\n{when.calendar_hint(now)}\n"
             f"[사용자 지역] {location}\n[최근 대화]\n{recent}\n\n[메시지]\n{message}")
+    system, managed = observe.managed_prompt("router", ROUTER_TEMPLATE, label, **router_variables())
     if step:
         step.update(input=user)  # 모델이 실제로 받은 입력으로 바꾼다
-    data = llm.complete_json(router_prompt(), user, obs=step)
+        if managed:
+            step.update(prompt=managed)  # 트레이스에 어느 프롬프트 버전으로 골랐는지 남긴다
+    data = llm.complete_json(system, user, obs=step)
     tools = []
     for t in data.get("tools") or []:
         if isinstance(t, dict) and t.get("name") in TOOLS:
